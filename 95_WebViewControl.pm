@@ -10,18 +10,29 @@
 ################################################################################
 
 package main;
+
+use Data::Dumper;    # for debugging only
+
 use strict;
 use warnings;
+use URI::Escape;
+
+use vars qw {%data %attr %defs %modules $FW_RET}; #supress errors in Eclipse EPIC
+
+use constant {
+	webViewControl_Version => '0.5.1_beta',
+};
 
 #########################
 # Forward declaration
 sub webViewControl_Initialize($);		# Initialize
 sub webViewControl_Define($$);			# define <name> WEBVIEWCONTROL
 sub webViewControl_Undef($$);			# delete
-sub webViewControl_modifyJsInclude();	# include js parts
+sub webViewControl_modifyJsInclude($);	# include js parts
 sub webViewControl_Set($@);				# set
 sub webViewControl_Get($@);				# get
 sub webViewControl_Cgi();				# analyze and parse URL
+sub webViewControl_Attr(@);
 
 #########################
 # Global variables
@@ -37,6 +48,8 @@ my %sets = (
 	'audioStop'			=> 'audioStop',
 	'ttsSay'			=> 'ttsSay',
 	'voiceRec'			=> 'voiceRec',
+	'newUrl'			=> 'newUrl',	
+	'reload'			=> 'reload',	
 );
 	
 my %gets = (
@@ -57,11 +70,14 @@ my $FW_encoding="UTF-8";		 # like in FHEMWEB: encoding hardcoded
 sub webViewControl_Initialize($) {
 	my ($hash) = @_;
 
-	$hash->{DefFn}		= 'webViewControl_Define';
-	$hash->{UndefFn}	= 'webViewControl_Undef';
-	$hash->{SetFn}		= 'webViewControl_Set';
-	$hash->{GetFn}		= 'webViewControl_Get';
-	$hash->{AttrList}	= 'loglevel:0,1,2,3,4,5,6 model';
+	$hash->{DefFn}    = 'webViewControl_Define';
+	$hash->{UndefFn}  = 'webViewControl_Undef';
+	$hash->{SetFn}    = 'webViewControl_Set';
+	$hash->{GetFn}    = 'webViewControl_Get';
+	$hash->{AttrFn}   = "webViewControl_Attr";
+
+	$hash->{AttrList} = 'loglevel:0,1,2,3,4,5,6 model userJsFile userCssFile '
+	                  . $readingFnAttributes;
 
 	# CGI
 	$data{FWEXT}{$fhemUrl}{FUNC} = 'webViewControl_Cgi';
@@ -86,7 +102,10 @@ sub webViewControl_Define($$) {
 	$hash->{appID} = $a[2];
 	$modules{webViewControl}{defptr}{$name} = $hash;									  
 
-	webViewControl_modifyJsInclude();
+	webViewControl_modifyJsInclude($hash);
+
+	$hash->{VERSION} = webViewControl_Version;
+
 	return undef;
 }
 
@@ -95,21 +114,45 @@ sub webViewControl_Undef($$) {
 	my ($hash, $name) = @_;
   
 	delete($modules{webViewControl}{defptr}{$name});
-	webViewControl_modifyJsInclude();
+	webViewControl_modifyJsInclude($hash);
 
   return undef;
 }
 
-sub webViewControl_modifyJsInclude() {
+sub webViewControl_Attr (@) {
+	my (undef, $name, $attr, $val) =  @_;
+	my $hash = $defs{$name};
+	my $msg = '';
+
+	if ($attr eq 'userJsFile' || $attr eq 'userCssFile') {
+		$attr{$name}{$attr} = $val;
+		webViewControl_modifyJsInclude($hash);
+	}
+
+	return undef;
+}
+
+sub webViewControl_modifyJsInclude($) {
+	my ($hash) = @_;
+	my $name = $hash->{NAME};
+
 	my @appsArray;
 	foreach my $appName (keys %{ $modules{webViewControl}{defptr} } ) {
-		push(@appsArray, $modules{webViewControl}{defptr}{$appName}->{appID} . ': \'' . $appName . '\'');
+		push(@appsArray, '\'' . $modules{webViewControl}{defptr}{$appName}->{appID} . '\': \'' . $appName . '\'');
 	}
 
 	my $vars = 'var wvcDevices = {' . join(', ', @appsArray) . '}';
-	
+	my $userJs = AttrVal($name, 'userJsFile', '');
+	$userJs = $userJs ? '<script type="text/javascript" src="/fhem/pgm2/' . $userJs . '"></script>' : '';
+
+	my $userCss = AttrVal($name, 'userCssFile', '');
+	if ($userCss) {
+		$vars.= '; var wvcUserCssFile="' . $userCss . '"';  
+	}
+
 	$data{FWEXT}{$fhemUrl}{SCRIPT} = 'cordova-2.3.0.js"></script>' .
-									 '<script type="text/javascript" src="/fhem/js/webviewcontrol.js"></script>' .
+									 '<script type="text/javascript" src="/fhem/pgm2/webviewcontrol.js"></script>' .
+									 $userJs .
 									 '<script type="text/javascript">' . $vars . '</script>' .
 									 '<script type="text/javascript" charset="UTF-8';
 }
@@ -132,81 +175,54 @@ sub webViewControl_Set($@) {
 		return 'Please specify one of following set value: ' . $setArgs;
 	}
 
-	if (! (($sets{$a[0]} eq 'reload') || ($sets{$a[0]} eq 'audioStop')) ) {
-		if ($sets{$a[0]} eq 'toastMessage' && (int(@a)) < 2) {
+	my $cmd = $a[0];
+
+	if (! (($sets{$cmd} eq 'reload') || ($sets{$cmd} eq 'audioStop')) ) {
+		if ($sets{$cmd} eq 'toastMessage' && (int(@a)) < 2) {
 			return 'Please input a text for toastMessage';
 
-		} elsif ($sets{$a[0]} eq 'keepScreenOn') {
+		} elsif ($sets{$cmd} eq 'keepScreenOn') {
 			if ($a[1] ne 'on' && $a[1] ne 'off') {
 				return 'keepScreenOn needs on of off';
 			} else {
 				$a[1] = ($a[1] eq 'on') ? 'true' : 'false'; 
 			}
 			
-		} elsif ($sets{$a[0]} eq 'screenBrightness' && (int($a[1]) < 1 || int($a[1]) > 255)) {
+		} elsif ($sets{$cmd} eq 'screenBrightness' && (int($a[1]) < 1 || int($a[1]) > 255)) {
 			return 'screenBrightness needs value from 1 to 255';
 
-		} elsif ($sets{$a[0]} eq 'volume' && (int($a[1]) < 0 || int($a[1]) > 15)) {
+		} elsif ($sets{$cmd} eq 'volume' && (int($a[1]) < 0 || int($a[1]) > 15)) {
 			return 'volume needs value from 0 to 15';
 
-		} elsif ($sets{$a[0]} eq 'audioPlay' && (int(@a)) < 2 ) {
+		} elsif ($sets{$cmd} eq 'audioPlay' && (int(@a)) < 2 ) {
 			return 'Please input a url where Audio to play.';
 
-		} elsif ($sets{$a[0]} eq 'ttsSay' && (int(@a)) < 2 ) {
+		} elsif ($sets{$cmd} eq 'ttsSay' && (int(@a)) < 2 ) {
 			return 'Please input a text to say.';
 
-		} elsif ($sets{$a[0]} eq 'voiceRec' && ($a[1] ne 'start' && $a[1] ne 'stop')) {
+		} elsif ($sets{$cmd} eq 'voiceRec' && ($a[1] ne 'start' && $a[1] ne 'stop')) {
 			return 'voiceRec must set to start or stop';
+
+		} elsif ($sets{$cmd} eq 'newUrl') {
+			if ((int(@a)) < 2 ) {
+				return 'Please input a url.';
+			} else {
+				shift(@a);
+				my $v = uri_escape(join(' ', @a));
+				@a = ($cmd, $v);
+			}
 		}
 	}
 	
 	my $v = join(' ', @a);
-
 	$hash->{CHANGED}[0] = $v;
 	$hash->{STATE} = $v;
 	$hash->{lastCmd} = $v;
 	$hash->{READINGS}{state}{TIME} = TimeNow();
 	$hash->{READINGS}{state}{VAL} = $v;
-   
+
 	return undef;
 }
-
-###################################
-sub webViewControl_Set2($@) {
-	my ($hash, @a) = @_;
- 	my $name = shift @a;
-
-	my $setArgs = join(' ', sort keys %sets);
-
-	if (int(@a) < 1) {
-		return 'Please specify one of following set value: ' . $setArgs;
-	}
-	
-	if (int(@a) == 1 && $a[0] eq '?') {
-		return $setArgs;	
-	}
-
-	if (int(@a) < 2) {
-		return 'Unknown argument for ' . $a[0];
-	}
-
-	my $v = join(" ", @a);
-#  Log GetLogLevel($name,2), "dummy set $name $v";
-
-	$hash->{CHANGED}[0] = $v;
-	$hash->{STATE} = $v;
-	$hash->{READINGS}{state}{TIME} = TimeNow();
-	$hash->{READINGS}{state}{VAL} = $v;
-   
-#       Log 1, $t;
-#return $t;
-	return undef;
-}
-
-
-
-
-
 
 sub webViewControl_Get($@) {
 	my ($hash, @a) = @_;
@@ -244,7 +260,7 @@ sub webViewControl_Cgi() {
 		my $name = undef;
 		my %readings = ();
 		my $timeNow		= TimeNow();
-		
+
 		foreach my $pv (split("&", $htmlpart[1])) {		#per each URL-section devided by &
 			$pv =~ s/\+/ /g;
 			$pv =~ s/%(..)/chr(hex($1))/ge;
@@ -255,27 +271,23 @@ sub webViewControl_Cgi() {
 			if ($p eq 'id') {
 				$name = $v;
 			} else {
-				$readings{$p}{TIME} = $timeNow;
-				$readings{$p}{VAL} = $v;
+				$readings{$p} = $v;
 				push(@states, $p . '=' . $v);
 			}
 		}
 
 		if ($modules{webViewControl}{defptr}{$name}) {
 			my $state = join(', ', @states);
-#			$modules{webViewControl}{defptr}{$name}->{CHANGED}[0] = $state;
-			$modules{webViewControl}{defptr}{$name}->{STATE} = $state;
-			$modules{webViewControl}{defptr}{$name}->{READINGS}{state}{VAL} = $state;
-			$modules{webViewControl}{defptr}{$name}->{READINGS}{state}{TIME} = $timeNow;
+			my $hash = $modules{webViewControl}{defptr}{$name};
 
-			my $cc = 0;
+			readingsBeginUpdate($hash);
+			readingsBulkUpdate($hash, "state", $state);
+
 			foreach my $reading (keys %readings) {
-				$modules{webViewControl}{defptr}{$name}->{CHANGED}[$cc] = $reading . ': ' . $readings{$reading}{VAL};
-				$modules{webViewControl}{defptr}{$name}->{READINGS}{$reading} = $readings{$reading};
-				$cc++;
+				readingsBulkUpdate($hash, $reading, $readings{$reading});
 			}
 
-			DoTrigger($name, undef);
+			readingsEndUpdate($hash, 1);
 		}
 	}
 
@@ -283,3 +295,17 @@ sub webViewControl_Cgi() {
 }
 
 1;
+
+=pod
+=begin html
+
+<a name="WebViewControl"></a>
+<h3>WebViewControl</h3>
+<ul>
+	WebViewCountrol ist the interface for the android APP WebviewControl
+  <br><br>
+
+</ul>
+
+=end html
+=cut

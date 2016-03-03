@@ -339,26 +339,41 @@ var deviceControl = {
 		}
 	},
 
-    /**
-     *
-     * @param level
-     */
+	/**
+	 * Set screen brightness
+	 * @param level
+	 */
 	screenBrightness: function(level) {
 		deviceControl.exec('setScreenBrightness', [level]);
 	},
 
+	/**
+	 * Set volume
+	 * @param level
+	 */
 	volume: function(level) {
 		deviceControl.exec('setVolume', [level]);
 	},
-	
+
+	/**
+	 * Set keep screen on / off
+	 * @param value
+	 */
 	keepScreenOn: function(value) {
 		deviceControl.exec('setKeepScreenOn', [value]);
 	},
 
+	/**
+	 * Set Toast Message
+	 * @param message
+	 */
 	toastMessage: function(message) {
 		deviceControl.exec('showToast', [message]);
 	},
-	
+
+	/**
+	 * Perform a reload
+	 */
 	reload: function() {
 		window.location.reload();		
 	},
@@ -378,7 +393,10 @@ var deviceControl = {
 
 	voiceRec: function(opt) {
 		fhemWVC.startVoiceRecognition();
-//		deviceControl.toastMessage('voiceRec: ' + opt)
+	},
+
+	newUrl: function(opt) {
+		location.href = decodeURIComponent(opt);
 	}
 };
 
@@ -606,8 +624,7 @@ wvcApp = {
 var fhemWVC = {
 	httpRequest: null,
 	currResponseLine: 0,
-	appId: null,
-	defaultAppId: 12345,
+	appId: 12345,
 	debug: false,
 
 	deviceState: {
@@ -641,7 +658,7 @@ var fhemWVC = {
 		}
 
 		if(httpRequest.readyState != 3) {
-	    	return;
+			return;
 		}
 
 		var lines = httpRequest.responseText.split("\n");
@@ -689,6 +706,10 @@ var fhemWVC = {
 		wvcApp.initialize(function(){
 			fhemWVC.createIcons();
 
+			if (typeof(wvcUserCssFile) != 'undefined') {
+				fhemWVC.injectCss(wvcUserCssFile);
+			}
+
 			fhemWVC.reconnect(50);
 			fhemWVC.setConnectionState(navigator.connection.type);
 
@@ -705,7 +726,7 @@ var fhemWVC = {
 	},
 
 	createIcons: function() {
-		fhemWVC.injectCss();
+		fhemWVC.injectCss('webviewcontrol.css');
 
 		var iconDiv = document.createElement('div');
 		iconDiv.innerHTML = '<div> <div class="onlineIconWrapper"><div id="fhemWVC_onlineIcon" class="onlineIcon"></div></div>';
@@ -753,9 +774,13 @@ var fhemWVC = {
 		batteryIcon.className = 'batteryIcon ' + batClass;
 	},
 
-	injectCss: function() {
+	/**
+	 * Inject given css file
+	 * @param cssFile
+	 */
+	injectCss: function(cssFile) {
 		var css = document.createElement('link');
-		css.setAttribute('href','/fhem/css/webviewcontrol.css');
+		css.setAttribute('href','/fhem/pgm2/' + cssFile);
 		css.setAttribute('rel','stylesheet');
 		document.getElementsByTagName('head')[0].appendChild(css);
 	},
@@ -839,9 +864,10 @@ var fhemWVC = {
 //fhemWVC.injectRemoteDebugger();
 fhemWVC.initialize();
 
-// uncomment this for testing without the device
 /*
+// uncomment this for testing without the device
 document.addEventListener("DOMContentLoaded", function() {
+	fhemWVC.appId = '00001234';		// Set alternative appId here
 	fhemWVC.createIcons();
 	fhemWVC.reconnect(50);
 	fhemWVC.debug = true;
